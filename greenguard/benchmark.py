@@ -1,3 +1,4 @@
+import logging
 from itertools import product
 
 import pandas as pd
@@ -6,8 +7,10 @@ from sklearn.model_selection import train_test_split
 from greenguard.demo import load_demo
 from greenguard.pipeline import GreenGuardPipeline
 
+LOGGER = logging.getLogger(__name__)
 
-def build_init_params(template, window_size, rule):
+
+def _build_init_params(template, window_size, rule):
     if 'lstm' in template:
         window_size = int(pd.to_timedelta(window_size) / pd.to_timedelta(rule))
         return [{
@@ -18,6 +21,7 @@ def build_init_params(template, window_size, rule):
                 'window_size': window_size,
             }
         }]
+
     elif 'dfs' in template:
         return [{
             'pandas.DataFrame.resample#1': {
@@ -29,7 +33,7 @@ def build_init_params(template, window_size, rule):
         }]
 
 
-def build_init_preprocessing(templates, template, preprocessing):
+def _build_init_preprocessing(templates, template, preprocessing):
     if isinstance(preprocessing, dict):
         return preprocessing[template]
     elif isinstance(preprocessing, list):
@@ -40,11 +44,49 @@ def build_init_preprocessing(templates, template, preprocessing):
 
 def evaluate_template(template, metric, target_times, readings, tuning_iterations, preprocessing=0,
                       init_params=None, cost=False, test_size=0.25, cv_splits=3, random_state=0):
+    """Returns the scores for a given template.
 
-    scores = {}
+    Args:
+        template (str):
+            Given template to evaluate.
+        metric (function or str).
+        target_times (DataFrame):
+            Contains the specefication problem that we are solving, which has three columns:
+                - turbine_id: Unique identifier of the turbine which this label corresponds to.
+                - cutoff_time: Time associated with this target.
+                - target: The value that we want to predict. This can either be a numerical value
+                          or a categorical label. This column can also be skipped when preparing
+                          data that will be used only to make predictions and not to fit any
+                          pipeline.
+        readings (DataFrame):
+            Contains the signal data from different sensors, with the following columns:
+                - turbine_id: Unique identifier of the turbine which this reading comes from.
+                - signal_id: Unique identifier of the signal which this reading comes from.
+                - timestamp (datetime): Time where the reading took place, as a datetime.
+                - value (float): Numeric value of this reading.
+        tuning_iterations (int):
+            Number of iterations to be used.
+        preprocessing (int, list or dict):
+            Type of preprocessing to be used.
+        init_params (list):
+            Initialization parameters for the pipeline.
+        cost (bool):
+            Wheter the metric is a cost function (the lower the better) or not.
+        test_size (float):
+            Percentage of the data set to be used for the test.
+        cv_splits (int):
+            Amount of splits to create.
+        random_state (int):
+            Random number of train_test split.
+
+    Returns:
+        scores (dict):
+            Stores the four types of scores that are being evaluate.
+
+    """
+    scores = dict()
 
     try:
-
         train, test = train_test_split(target_times, test_size=test_size,
                                        random_state=random_state)
 
@@ -57,7 +99,7 @@ def evaluate_template(template, metric, target_times, readings, tuning_iteration
 
         scores['default_test'] = metric(test['target'], predictions)
 
-        # Computing de default cross validation score
+        # Computing the default cross validation score
         session = pipeline.tune(train, readings)
         session.run(1)
 
@@ -73,24 +115,99 @@ def evaluate_template(template, metric, target_times, readings, tuning_iteration
         predictions = pipeline.predict(test, readings)
 
         scores['tuned_test'] = metric(test['target'], predictions)
+        scores['status'] = 'OK'
 
-    except Exception:
+    except Exception as ex:
+        LOGGER.warn('Could not score template: %s : %s', template, ex)
+        scores['status'] = 'ERRORED'
         return scores
-    else:
-        return scores
+
+    return scores
 
 
-def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, readings=None,
-                       target_times=None, preprocessing=0, cost=False, test_size=0.25,
-                       cv_splits=3, random_state=0):
+def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, target_times=None,
+                       readings=None, preprocessing=0, cost=False, test_size=0.25,
+                       cv_splits=3, random_state=0, output_path=None):
+    """Execute the benchmark process and optionally store the result as a ``CSV``.
+
+    Args:
+        templates (list):
+            List of templates to try.
+        window_size_rule (list):
+            List of tupples (int, str or Timedelta object).
+        metric (function or str).
+        tuning_iterations (int):
+            Number of iterations to be used.
+        target_times (DataFrame):
+            Contains the specefication problem that we are solving, which has three columns:
+                - turbine_id: Unique identifier of the turbine which this label corresponds to.
+                - cutoff_time: Time associated with this target.
+                - target: The value that we want to predict. This can either be a numerical value
+                          or a categorical label. This column can also be skipped when preparing
+                          data that will be used only to make predictions and not to fit any
+                          pipeline.
+        readings (DataFrame):
+            Contains the signal data from different sensors, with the following columns:
+                - turbine_id: Unique identifier of the turbine which this reading comes from.
+                - signal_id: Unique identifier of the signal which this reading comes from.
+                - timestamp (datetime): Time where the reading took place, as a datetime.
+                - value (float): Numeric value of this reading.
+        preprocessing (int, list or dict):
+            Type of preprocessing to be used.
+        cost (bool):
+            Wheter the metric is a cost function (the lower the better) or not.
+        test_size (float):
+            Percentage of the data set to be used for the test.
+        cv_splits (int):
+            Amount of splits to create.
+        random_state (int):
+            Random number of train_test split.
+
+    Returns:
+        pandas.DataFrame or None:
+            If ``output_path`` is ``None`` it will return a ``pandas.DataFrame`` object,
+            else it will dump the results in the specified ``output_path``.
+
+    Example:
+        The following example:
+
+        >>> templates =  [
+        ...    'normalize_dfs_xgb_classifier',
+        ...    'unstack_double_lstm_timeseries_classifier',
+        ... ]
+
+        >>> window_size_rule = [
+        ...     ('30d','12h'),
+        ...     ('30d','1d')
+        ... ]
+
+        >>> preprocessing = [0, 1]
+
+        >>> scores_df = evaluate_templates(
+        ...                 templates=templates,
+        ...                 window_size_rule=window_size_rule,
+        ...                 metric=f1_score,
+        ...                 tuning_iterations=50,
+        ...                 preprocessing=preprocessing,
+        ...                 cost=False,
+        ...                 test_size=0.25,
+        ...                 cv_splits=3,
+        ...                 random_state=0
+        ...             )
+        >>> scores_df
+            default_cv  default_test rule   status      template  tuned_cv  tuned_test window_size
+            0.675917      0.641509  12h       OK   normalize...  0.707779    0.666667         30d
+            0.736454      0.705882   1d       OK   normalize...  0.754097    0.760000         30d
+                 NaN           NaN  12h  ERRORED   unstack...         NaN         NaN         30d
+                 NaN           NaN   1d  ERRORED   unstack...         NaN         NaN         30d
+
+    """
 
     if readings is None and target_times is None:
         target_times, readings = load_demo()
 
     scores_list = []
-
     for template, window_rule in product(templates, window_size_rule):
-
         window_size, rule = window_rule
 
         scores = dict()
@@ -99,8 +216,8 @@ def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, r
         scores['rule'] = rule
 
         try:
-            init_params = build_init_params(template, window_size, rule)
-            init_preprocessing = build_init_preprocessing(templates, template, preprocessing)
+            init_params = _build_init_params(template, window_size, rule)
+            init_preprocessing = _build_init_preprocessing(templates, template, preprocessing)
 
             result = evaluate_template(
                 template=template,
@@ -118,44 +235,12 @@ def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, r
             scores.update(result)
             scores_list.append(scores)
 
-        except Exception:
-            print('Error')
+        except Exception as ex:
+            LOGGER.warn('Could not score template %s : %s', template, ex)
 
-    return pd.DataFrame.from_records(scores_list)
-
-
-'''
-A possible call to this method could be:
-
-    templates =  [
-        'normalize_dfs_xgb_classifier',
-        'unstack_double_lstm_timeseries_classifier',
-    ]
-
-    window_size_rule = [
-        ('30d','12h'),
-        ('30d','1d')
-    ]
-
-    preprocessing = [0,1,2]
-    preprocessing = 1
-    preprocessing = {
-        'normalize_dfs_xgb_classifier': 0,
-        'unstack_double_lstm_timeseries_classifier': 1,
-        'unstack_dfs_xgb_classifier': 2
-    }
-
-    scores_df = evaluate_templates(
-                    templates=templates,
-                    window_size_rule=window_size_rule,
-                    metric=f1_score,
-                    tuning_iterations=50,
-                    preprocessing=preprocessing,
-                    cost=False,
-                    test_size=0.25,
-                    cv_splits=3,
-                    random_state=0
-                )
-
-where scores_df is the resulting DataFrame.
-'''
+    results = pd.DataFrame.from_records(scores_list)
+    if output_path:
+        LOGGER.info('Saving benchmark report to %s', output_path)
+        results.to_csv(output_path)
+    else:
+        return results
