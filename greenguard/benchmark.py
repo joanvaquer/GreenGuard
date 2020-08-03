@@ -10,36 +10,54 @@ from greenguard.pipeline import GreenGuardPipeline
 LOGGER = logging.getLogger(__name__)
 
 
-def _build_init_params(template, window_size, rule):
+def _generate_init_params(templates, init_params):
+    if not init_params:
+        init_params = {}
+    elif isinstance(init_params, list):
+        init_params = dict(zip(templates, init_params))
+    elif any(name in init_params for name in templates):
+        init_params = init_params
+    else:
+        init_params = {template: init_params for template in templates}
+
+    return init_params
+
+
+def _build_init_params(template, window_size, rule, template_params):
     if 'lstm' in template:
-        window_size = int(pd.to_timedelta(window_size) / pd.to_timedelta(rule))
-        return [{
+        window_size_rule_params = {
             'pandas.DataFrame.resample#1': {
                 'rule': rule,
             },
             'featuretools.dfs.json#1': {
                 'window_size': window_size,
             }
-        }]
+        }
 
     elif 'dfs' in template:
-        return [{
+        window_size_rule_params = {
             'pandas.DataFrame.resample#1': {
                 'rule': rule,
             },
             'mlprimitives.custom.timeseries_preprocessing.cutoff_window_sequences#1': {
                 'training_window': window_size,
             }
-        }]
+        }
+
+    for primitive, params in window_size_rule_params.items():
+        primitive_params = template_params.get(primitive, {})
+        primitive_params.update(params)
+
+    return template_params
 
 
 def _build_init_preprocessing(templates, template, preprocessing):
-    if isinstance(preprocessing, dict):
-        return preprocessing[template]
-    elif isinstance(preprocessing, list):
-        return preprocessing[templates.index(template)]
-    else:
+    if isinstance(preprocessing, int):
         return preprocessing
+    elif isinstance(preprocessing, list):
+        preprocessing = dict(zip(templates, preprocessing))
+
+    return preprocessing.get(template, 0)
 
 
 def evaluate_template(template, metric, target_times, readings, tuning_iterations, preprocessing=0,
@@ -49,21 +67,27 @@ def evaluate_template(template, metric, target_times, readings, tuning_iteration
     Args:
         template (str):
             Given template to evaluate.
-        metric (function or str).
+        metric (function or str):
+            Metric to use. If an ``str`` is give it must be one of the metrics
+            defined in the ``greenguard.metrics.METRICS`` dictionary.
         target_times (DataFrame):
             Contains the specefication problem that we are solving, which has three columns:
-                - turbine_id: Unique identifier of the turbine which this label corresponds to.
-                - cutoff_time: Time associated with this target.
-                - target: The value that we want to predict. This can either be a numerical value
+
+                * turbine_id: Unique identifier of the turbine which this label corresponds to.
+                * cutoff_time: Time associated with this target.
+                * target: The value that we want to predict. This can either be a numerical value
                           or a categorical label. This column can also be skipped when preparing
                           data that will be used only to make predictions and not to fit any
                           pipeline.
+
         readings (DataFrame):
             Contains the signal data from different sensors, with the following columns:
-                - turbine_id: Unique identifier of the turbine which this reading comes from.
-                - signal_id: Unique identifier of the signal which this reading comes from.
-                - timestamp (datetime): Time where the reading took place, as a datetime.
-                - value (float): Numeric value of this reading.
+
+                * turbine_id: Unique identifier of the turbine which this reading comes from.
+                * signal_id: Unique identifier of the signal which this reading comes from.
+                * timestamp (datetime): Time where the reading took place, as a datetime.
+                * value (float): Numeric value of this reading.
+
         tuning_iterations (int):
             Number of iterations to be used.
         preprocessing (int, list or dict):
@@ -82,10 +106,8 @@ def evaluate_template(template, metric, target_times, readings, tuning_iteration
     Returns:
         scores (dict):
             Stores the four types of scores that are being evaluate.
-
     """
     scores = dict()
-
     try:
         train, test = train_test_split(target_times, test_size=test_size,
                                        random_state=random_state)
@@ -125,9 +147,9 @@ def evaluate_template(template, metric, target_times, readings, tuning_iteration
     return scores
 
 
-def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, target_times=None,
-                       readings=None, preprocessing=0, cost=False, test_size=0.25,
-                       cv_splits=3, random_state=0, output_path=None):
+def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, init_params=None,
+                       target_times=None, readings=None, preprocessing=0, cost=False,
+                       test_size=0.25, cv_splits=3, random_state=0, output_path=None):
     """Execute the benchmark process and optionally store the result as a ``CSV``.
 
     Args:
@@ -136,22 +158,28 @@ def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, t
         window_size_rule (list):
             List of tupples (int, str or Timedelta object).
         metric (function or str).
+            Metric to use. If an ``str`` is give it must be one of the metrics
+            defined in the ``greenguard.metrics.METRICS`` dictionary.
         tuning_iterations (int):
             Number of iterations to be used.
         target_times (DataFrame):
             Contains the specefication problem that we are solving, which has three columns:
-                - turbine_id: Unique identifier of the turbine which this label corresponds to.
-                - cutoff_time: Time associated with this target.
-                - target: The value that we want to predict. This can either be a numerical value
+
+                * turbine_id: Unique identifier of the turbine which this label corresponds to.
+                * cutoff_time: Time associated with this target.
+                * target: The value that we want to predict. This can either be a numerical value
                           or a categorical label. This column can also be skipped when preparing
                           data that will be used only to make predictions and not to fit any
                           pipeline.
+
         readings (DataFrame):
             Contains the signal data from different sensors, with the following columns:
-                - turbine_id: Unique identifier of the turbine which this reading comes from.
-                - signal_id: Unique identifier of the signal which this reading comes from.
-                - timestamp (datetime): Time where the reading took place, as a datetime.
-                - value (float): Numeric value of this reading.
+
+                * turbine_id: Unique identifier of the turbine which this reading comes from.
+                * signal_id: Unique identifier of the signal which this reading comes from.
+                * timestamp (datetime): Time where the reading took place, as a datetime.
+                * value (float): Numeric value of this reading.
+
         preprocessing (int, list or dict):
             Type of preprocessing to be used.
         cost (bool):
@@ -162,6 +190,8 @@ def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, t
             Amount of splits to create.
         random_state (int):
             Random number of train_test split.
+        output_path (str):
+            Path where to save the benchmark report.
 
     Returns:
         pandas.DataFrame or None:
@@ -169,20 +199,16 @@ def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, t
             else it will dump the results in the specified ``output_path``.
 
     Example:
-        The following example:
-
-        >>> templates =  [
+        >>> from sklearn.metrics import f1_score
+        >>> templates = [
         ...    'normalize_dfs_xgb_classifier',
-        ...    'unstack_double_lstm_timeseries_classifier',
+        ...    'unstack_lstm_timeseries_classifier',
         ... ]
-
         >>> window_size_rule = [
         ...     ('30d','12h'),
-        ...     ('30d','1d')
+        ...     ('7d','4h')
         ... ]
-
         >>> preprocessing = [0, 1]
-
         >>> scores_df = evaluate_templates(
         ...                 templates=templates,
         ...                 window_size_rule=window_size_rule,
@@ -195,13 +221,14 @@ def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, t
         ...                 random_state=0
         ...             )
         >>> scores_df
-            default_cv  default_test rule   status      template  tuned_cv  tuned_test window_size
-            0.675917      0.641509  12h       OK   normalize...  0.707779    0.666667         30d
-            0.736454      0.705882   1d       OK   normalize...  0.754097    0.760000         30d
-                 NaN           NaN  12h  ERRORED   unstack...         NaN         NaN         30d
-                 NaN           NaN   1d  ERRORED   unstack...         NaN         NaN         30d
+                                     template window_size resample_rule  ...  tuned_cv  tuned_test   status
+        0        normalize_dfs_xgb_classifier         30d           12h  ...  0.716424    0.680000       OK
+        1        normalize_dfs_xgb_classifier          7d            4h  ...  0.686078    0.703704       OK
+        2  unstack_lstm_timeseries_classifier         30d           12h  ...       NaN         NaN  ERRORED
+        3  unstack_lstm_timeseries_classifier          7d            4h  ...       NaN         NaN  ERRORED
 
-    """
+        [4 rows x 8 columns]
+    """ # noqa
 
     if readings is None and target_times is None:
         target_times, readings = load_demo()
@@ -213,10 +240,11 @@ def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, t
         scores = dict()
         scores['template'] = template
         scores['window_size'] = window_size
-        scores['rule'] = rule
+        scores['resample_rule'] = rule
 
         try:
-            init_params = _build_init_params(template, window_size, rule)
+            template_params = _generate_init_params(template, init_params)
+            init_params = _build_init_params(template, window_size, rule, template_params)
             init_preprocessing = _build_init_preprocessing(templates, template, preprocessing)
 
             result = evaluate_template(
@@ -239,8 +267,11 @@ def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, t
             LOGGER.warn('Could not score template %s : %s', template, ex)
 
     results = pd.DataFrame.from_records(scores_list)
+
     if output_path:
         LOGGER.info('Saving benchmark report to %s', output_path)
         results.to_csv(output_path)
     else:
+        results = results[['template', 'window_size', 'resample_rule', 'default_test',
+                           'default_cv', 'tuned_cv', 'tuned_test', 'status']]
         return results

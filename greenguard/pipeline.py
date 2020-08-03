@@ -132,7 +132,7 @@ class GreenGuardPipeline(object):
             Template to use. If a ``str`` is given, load the corresponding
             ``MLPipeline``. Also can be a list combining both.
         metric (str or function):
-            Metric to use. If an ``str`` is give it must be one of the metrics
+            Metric to use. If an ``str`` is given it must be one of the metrics
             defined in the ``greenguard.metrics.METRICS`` dictionary.
         cost (bool):
             Whether the metric is a cost function (the lower the better) or not.
@@ -240,7 +240,7 @@ class GreenGuardPipeline(object):
         elif isinstance(init_params, list):
             self._init_params = dict(zip(self._template_names, init_params))
         elif any(name in init_params for name in self._template_names):
-            self._init_params = init_params
+            self._init_params = {template: init_params for template in self._tempalte_names}
 
     def _generate_preprocessing(self, preprocessing):
         if isinstance(preprocessing, int):
