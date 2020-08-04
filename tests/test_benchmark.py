@@ -8,7 +8,7 @@ from greenguard.demo import load_demo
 def test_predict():
     # setup
     templates = [
-        'normalize_dfs_xgb_classifier'
+        'unstack_lstm_timeseries_classifier'
     ]
 
     window_size_rule = [

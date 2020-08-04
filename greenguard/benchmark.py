@@ -197,6 +197,9 @@ def evaluate_templates(templates, window_size_rule, metric='f1', tuning_iteratio
 
     Example:
         >>> from sklearn.metrics import f1_score
+        >>> target_times, readings = load_demo()
+        >>> target_times = target_times.head(10)
+        >>> readings = readings.head(100)
         >>> templates = [
         ...    'normalize_dfs_xgb_classifier',
         ...    'unstack_lstm_timeseries_classifier'
@@ -209,8 +212,10 @@ def evaluate_templates(templates, window_size_rule, metric='f1', tuning_iteratio
         >>> scores_df = evaluate_templates(
         ...                 templates=templates,
         ...                 window_size_rule=window_size_rule,
+        ...                 readings=readings,
+        ...                 target_times=target_times,
         ...                 metric=f1_score,
-        ...                 tuning_iterations=50,
+        ...                 tuning_iterations=5,
         ...                 preprocessing=preprocessing,
         ...                 cost=False,
         ...                 test_size=0.25,
@@ -218,11 +223,11 @@ def evaluate_templates(templates, window_size_rule, metric='f1', tuning_iteratio
         ...                 random_state=0
         ...             )
         >>> scores_df
-                                     template window_size resample_rule  ...  tuned_cv  tuned_test   status
-        0        normalize_dfs_xgb_classifier         30d           12h  ...  0.716424    0.680000       OK
-        1        normalize_dfs_xgb_classifier          7d            4h  ...  0.686078    0.703704       OK
-        2  unstack_lstm_timeseries_classifier         30d           12h  ...       NaN         NaN  ERRORED
-        3  unstack_lstm_timeseries_classifier          7d            4h  ...       NaN         NaN  ERRORED
+                                         template window_size resample_rule  default_test  default_cv  tuned_cv  tuned_test   status
+        0        normalize_dfs_xgb_classifier         30d           12h           0.0         0.0       0.0         0.0       OK
+        1        normalize_dfs_xgb_classifier          7d            4h           0.0         0.0       0.0         0.0       OK
+        2  unstack_lstm_timeseries_classifier         30d           12h           NaN         NaN       NaN         NaN  ERRORED
+        3  unstack_lstm_timeseries_classifier          7d            4h           NaN         NaN       NaN         NaN  ERRORED
 
         [4 rows x 8 columns]
     """ # noqa
@@ -267,8 +272,8 @@ def evaluate_templates(templates, window_size_rule, metric='f1', tuning_iteratio
         scores_list.append(scores)
 
     results = pd.DataFrame.from_records(scores_list)
-    results = results[['template', 'window_size', 'resample_rule', 'default_test',
-                       'default_cv', 'tuned_cv', 'tuned_test', 'status']]
+    results = results.reindex(['template', 'window_size', 'resample_rule', 'default_test',
+                              'default_cv', 'tuned_cv', 'tuned_test', 'status'], axis=1)
 
     if output_path:
         LOGGER.info('Saving benchmark report to %s', output_path)
