@@ -1,34 +1,57 @@
 """Tests for `greenguard.benchmark` module."""
-from unittest import TestCase
-
 from sklearn.metrics import f1_score
 
-from greenguard import benchmark
+from greenguard.benchmark import evaluate_templates
+from greenguard.demo import load_demo
 
 
-class BenchmarkTest(TestCase):
+def test_predict():
+    # setup
+    templates = [
+        'normalize_dfs_xgb_classifier'
+    ]
 
-    def test_predict(self):
-        # setup
-        templates = [
-            'normalize_dfs_xgb_classifier'
-        ]
-        window_size_rule = [
-            ('30d', '12h')
-        ]
-        # run
-        scores_df = benchmark.evaluate_templates(
-            templates=templates,
-            window_size_rule=window_size_rule,
-            metric=f1_score,
-            tuning_iterations=5
-        )
+    window_size_rule = [
+        ('30d', '12h')
+    ]
 
-        # assert
-        columns = (['template', 'window_size', 'resample_rule', 'default_test',
-                    'default_cv', 'tuned_cv', 'tuned_test', 'status'])
-        dtypes = ['object', 'object', 'object', 'float64', 'float64', 'float64', 'float64',
-                  'object']
-        assert(scores_df.columns == columns).all()
-        assert(scores_df.tuned_test.notnull)
-        assert(scores_df.dtypes == dtypes).all()
+    target_times, readings = load_demo()
+    target_times = target_times.head(10)
+    readings = readings.head(100)
+
+    # run
+    scores_df = evaluate_templates(
+        target_times=target_times,
+        readings=readings,
+        templates=templates,
+        window_size_rule=window_size_rule,
+        metric=f1_score,
+        tuning_iterations=5
+    )
+
+    # assert
+    expected_columns = [
+        'template',
+        'window_size',
+        'resample_rule',
+        'default_test',
+        'default_cv',
+        'tuned_cv',
+        'tuned_test',
+        'status'
+    ]
+
+    expected_dtypes = [
+        'object',
+        'object',
+        'object',
+        'float64',
+        'float64',
+        'float64',
+        'float64',
+        'object'
+    ]
+
+    assert (scores_df.columns.to_list() == expected_columns)
+    assert (scores_df.tuned_test.notnull)
+    assert (scores_df.dtypes.to_list() == expected_dtypes)

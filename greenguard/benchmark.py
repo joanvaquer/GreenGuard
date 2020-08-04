@@ -5,6 +5,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from greenguard.demo import load_demo
+from greenguard.metrics import METRICS
 from greenguard.pipeline import GreenGuardPipeline
 
 LOGGER = logging.getLogger(__name__)
@@ -24,23 +25,22 @@ def _generate_init_params(templates, init_params):
 
 
 def _build_init_params(template, window_size, rule, template_params):
-    if 'lstm' in template:
+    if 'dfs' in template:
         window_size_rule_params = {
             'pandas.DataFrame.resample#1': {
                 'rule': rule,
             },
             'featuretools.dfs.json#1': {
-                'window_size': window_size,
+                'training_window': window_size,
             }
         }
-
-    elif 'dfs' in template:
+    elif 'lstm' in template:
         window_size_rule_params = {
             'pandas.DataFrame.resample#1': {
                 'rule': rule,
             },
             'mlprimitives.custom.timeseries_preprocessing.cutoff_window_sequences#1': {
-                'training_window': window_size,
+                'window_size': window_size,
             }
         }
 
@@ -60,8 +60,9 @@ def _build_init_preprocessing(templates, template, preprocessing):
     return preprocessing.get(template, 0)
 
 
-def evaluate_template(template, metric, target_times, readings, tuning_iterations, preprocessing=0,
-                      init_params=None, cost=False, test_size=0.25, cv_splits=3, random_state=0):
+def evaluate_template(template, target_times, readings, metric='f1', tuning_iterations=50,
+                      preprocessing=0, init_params=None, cost=False, test_size=0.25, cv_splits=3,
+                      random_state=0):
     """Returns the scores for a given template.
 
     Args:
@@ -108,48 +109,44 @@ def evaluate_template(template, metric, target_times, readings, tuning_iteration
             Stores the four types of scores that are being evaluate.
     """
     scores = dict()
-    try:
-        train, test = train_test_split(target_times, test_size=test_size,
-                                       random_state=random_state)
 
-        pipeline = GreenGuardPipeline(template, metric, cost=cost, cv_splits=cv_splits,
-                                      init_params=init_params, preprocessing=preprocessing)
+    train, test = train_test_split(target_times, test_size=test_size, random_state=random_state)
 
-        # Computing the default test score
-        pipeline.fit(train, readings)
-        predictions = pipeline.predict(test, readings)
+    if isinstance(metric, str):
+        metric, cost = METRICS[metric]
 
-        scores['default_test'] = metric(test['target'], predictions)
+    pipeline = GreenGuardPipeline(template, metric, cost=cost, cv_splits=cv_splits,
+                                  init_params=init_params, preprocessing=preprocessing)
 
-        # Computing the default cross validation score
-        session = pipeline.tune(train, readings)
-        session.run(1)
+    # Computing the default test score
+    pipeline.fit(train, readings)
+    predictions = pipeline.predict(test, readings)
 
-        scores['default_cv'] = pipeline.cv_score
+    scores['default_test'] = metric(test['target'], predictions)
 
-        # Computing the cross validation score with tuned hyperparameters
-        session.run(tuning_iterations)
+    # Computing the default cross validation score
+    session = pipeline.tune(train, readings)
+    session.run(1)
 
-        scores['tuned_cv'] = pipeline.cv_score
+    scores['default_cv'] = pipeline.cv_score
 
-        # Computing the test score with tuned hyperparameters
-        pipeline.fit(train, readings)
-        predictions = pipeline.predict(test, readings)
+    # Computing the cross validation score with tuned hyperparameters
+    session.run(tuning_iterations)
 
-        scores['tuned_test'] = metric(test['target'], predictions)
-        scores['status'] = 'OK'
+    scores['tuned_cv'] = pipeline.cv_score
 
-    except Exception as ex:
-        LOGGER.warn('Could not score template: %s : %s', template, ex)
-        scores['status'] = 'ERRORED'
-        return scores
+    # Computing the test score with tuned hyperparameters
+    pipeline.fit(train, readings)
+    predictions = pipeline.predict(test, readings)
+
+    scores['tuned_test'] = metric(test['target'], predictions)
 
     return scores
 
 
-def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, init_params=None,
-                       target_times=None, readings=None, preprocessing=0, cost=False,
-                       test_size=0.25, cv_splits=3, random_state=0, output_path=None):
+def evaluate_templates(templates, window_size_rule, metric='f1', tuning_iterations=50,
+                       init_params=None, target_times=None, readings=None, preprocessing=0,
+                       cost=False, test_size=0.25, cv_splits=3, random_state=0, output_path=None):
     """Execute the benchmark process and optionally store the result as a ``CSV``.
 
     Args:
@@ -202,7 +199,7 @@ def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, i
         >>> from sklearn.metrics import f1_score
         >>> templates = [
         ...    'normalize_dfs_xgb_classifier',
-        ...    'unstack_lstm_timeseries_classifier',
+        ...    'unstack_lstm_timeseries_classifier'
         ... ]
         >>> window_size_rule = [
         ...     ('30d','12h'),
@@ -249,9 +246,9 @@ def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, i
 
             result = evaluate_template(
                 template=template,
-                metric=metric,
                 target_times=target_times,
                 readings=readings,
+                metric=metric,
                 tuning_iterations=tuning_iterations,
                 preprocessing=init_preprocessing,
                 init_params=init_params,
@@ -261,17 +258,20 @@ def evaluate_templates(templates, window_size_rule, metric, tuning_iterations, i
                 random_state=random_state)
 
             scores.update(result)
-            scores_list.append(scores)
+            scores['status'] = 'OK'
 
-        except Exception as ex:
-            LOGGER.warn('Could not score template %s : %s', template, ex)
+        except Exception:
+            scores['status'] = 'ERRORED'
+            LOGGER.exception('Could not score template %s ', template)
+
+        scores_list.append(scores)
 
     results = pd.DataFrame.from_records(scores_list)
+    results = results[['template', 'window_size', 'resample_rule', 'default_test',
+                       'default_cv', 'tuned_cv', 'tuned_test', 'status']]
 
     if output_path:
         LOGGER.info('Saving benchmark report to %s', output_path)
         results.to_csv(output_path)
     else:
-        results = results[['template', 'window_size', 'resample_rule', 'default_test',
-                           'default_cv', 'tuned_cv', 'tuned_test', 'status']]
         return results
