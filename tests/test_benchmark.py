@@ -12,12 +12,10 @@ def test_predict():
     ]
 
     window_size_rule = [
-        ('30d', '12h')
+        ('1d', '1h')
     ]
 
     target_times, readings = load_demo()
-    target_times = target_times.head(10)
-    readings = readings.head(100)
 
     # run
     scores_df = evaluate_templates(
@@ -26,7 +24,8 @@ def test_predict():
         templates=templates,
         window_size_rule=window_size_rule,
         metric=f1_score,
-        tuning_iterations=5
+        tuning_iterations=2,
+        cv_splits=2
     )
 
     # assert

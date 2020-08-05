@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split
 
 from greenguard.demo import load_demo
 from greenguard.metrics import METRICS
-from greenguard.pipeline import GreenGuardPipeline
+from greenguard.pipeline import GreenGuardPipeline, generate_init_params
 
 LOGGER = logging.getLogger(__name__)
 
@@ -230,10 +230,12 @@ def evaluate_templates(templates, window_size_rule, metric='f1', tuning_iteratio
         3  unstack_lstm_timeseries_classifier          7d            4h           NaN         NaN       NaN         NaN  ERRORED
 
         [4 rows x 8 columns]
-    """ # noqa
+    """  # noqa
 
     if readings is None and target_times is None:
         target_times, readings = load_demo()
+
+    init_params = generate_init_params(templates, init_params)
 
     scores_list = []
     for template, window_rule in product(templates, window_size_rule):
@@ -245,8 +247,8 @@ def evaluate_templates(templates, window_size_rule, metric='f1', tuning_iteratio
         scores['resample_rule'] = rule
 
         try:
-            template_params = _generate_init_params(template, init_params)
-            init_params = _build_init_params(template, window_size, rule, template_params)
+            template_params = init_params[template]
+            template_params = _build_init_params(template, window_size, rule, template_params)
             init_preprocessing = _build_init_preprocessing(templates, template, preprocessing)
 
             result = evaluate_template(
@@ -256,7 +258,7 @@ def evaluate_templates(templates, window_size_rule, metric='f1', tuning_iteratio
                 metric=metric,
                 tuning_iterations=tuning_iterations,
                 preprocessing=init_preprocessing,
-                init_params=init_params,
+                init_params=template_params,
                 cost=cost,
                 test_size=test_size,
                 cv_splits=cv_splits,
